@@ -1,0 +1,9 @@
+# Source and intermediate data - regenerate with the pipeline below
+data/raw/*
+data/clean/*
+!data/raw/.gitkeep
+!data/clean/.gitkeep
+
+__pycache__/
+*.pyc
+.venv/

@@ -1,0 +1,130 @@
+================================================================================
+POWER BI - DAX
+Model: vw_rfm_segments (dimension, 1 row per customer)
+       vw_sales_fact   (fact, 1 row per invoice line)
+Relationship: vw_rfm_segments[customer_id]  1 --> *  vw_sales_fact[customer_id]
+================================================================================
+
+
+--------------------------------------------------------------------------------
+1. CALCULATED COLUMNS  ->  table: vw_rfm_segments
+--------------------------------------------------------------------------------
+
+-- Helper columns: split the 3-digit RFM_Score into its numeric parts.
+-- (Skip these two if you imported r_score / f_score / m_score from SQL.)
+
+R_Digit =
+VALUE ( LEFT ( vw_rfm_segments[rfm_score], 1 ) )
+
+F_Digit =
+VALUE ( MID ( vw_rfm_segments[rfm_score], 2, 1 ) )
+
+
+-- Main segmentation column.
+-- Exact 3-digit codes are matched first; the remaining cells fall through to
+-- the broader Recency / Frequency rules below them. Order matters.
+
+Customer_Segment =
+VAR RFM = vw_rfm_segments[rfm_score]
+VAR R   = VALUE ( LEFT ( RFM, 1 ) )
+VAR F   = VALUE ( MID ( RFM, 2, 1 ) )
+VAR M   = VALUE ( RIGHT ( RFM, 1 ) )
+RETURN
+    SWITCH (
+        TRUE (),
+
+        -- Best customers: bought recently, buy often, spend the most.
+        RFM IN { "555", "554", "544", "545", "454", "455", "445" }, "Champions",
+
+        -- High frequency and value, slightly less recent than Champions.
+        RFM IN { "543", "444", "435", "355", "354", "345", "344", "335" }, "Loyal Customers",
+
+        -- Recent buyers with growing frequency - nurture into Loyal.
+        RFM IN { "553", "551", "552", "541", "542", "533", "532", "531",
+                 "452", "451", "442", "441", "431", "453", "433", "432",
+                 "423", "353", "352", "351", "342", "341", "333", "323" }, "Potential Loyalist",
+
+        -- Very recent first purchase, low frequency so far.
+        RFM IN { "512", "511", "422", "421", "412", "411", "311" }, "New Customers",
+
+        -- Recent, low frequency, decent spend - worth a targeted offer.
+        RFM IN { "525", "524", "523", "522", "521", "515", "514", "513",
+                 "425", "424", "413", "414", "415", "315", "314", "313" }, "Promising",
+
+        -- Above-average on all three but trending down.
+        RFM IN { "535", "534", "443", "434", "343", "334", "325", "324" }, "Needs Attention",
+
+        -- Slipping away: below-average recency and frequency.
+        RFM IN { "331", "321", "312", "221", "213", "231", "241", "251" }, "About To Sleep",
+
+        -- Spent big and bought often, but have not returned in a long time.
+        RFM IN { "255", "254", "245", "244", "253", "252", "243", "242",
+                 "235", "234", "225", "224", "153", "152", "145", "143",
+                 "142", "135", "134", "133", "125", "124" }, "At Risk",
+
+        -- Highest historical value, now completely inactive - top win-back priority.
+        RFM IN { "155", "154", "144", "214", "215", "115", "114", "113" }, "Cannot Lose Them",
+
+        -- Long gone, low value.
+        RFM IN { "111", "112", "121", "131", "141", "151" }, "Lost",
+
+        -- Fall-through rules for any code not listed above.
+        R >= 4 && F >= 4,  "Champions",
+        R >= 4 && F >= 2,  "Potential Loyalist",
+        R >= 4,            "New Customers",
+        R = 3 && F >= 3,   "Loyal Customers",
+        R = 3,             "Needs Attention",
+        R = 2 && F >= 3,   "At Risk",
+        R <= 2 && M >= 4,  "Cannot Lose Them",
+        R = 2,             "About To Sleep",
+        R = 1 && F >= 3,   "At Risk",
+
+        "Hibernating"
+    )
+
+
+-- Optional: controls the slicer / axis order of the segments.
+Segment_Sort_Order =
+SWITCH (
+    vw_rfm_segments[Customer_Segment],
+    "Champions",          1,
+    "Loyal Customers",    2,
+    "Potential Loyalist", 3,
+    "New Customers",      4,
+    "Promising",          5,
+    "Needs Attention",    6,
+    "About To Sleep",     7,
+    "At Risk",            8,
+    "Cannot Lose Them",   9,
+    "Hibernating",       10,
+    "Lost",              11,
+    99
+)
+-- Then: select Customer_Segment > Column tools > Sort by column > Segment_Sort_Order
+
+
+--------------------------------------------------------------------------------
+2. CORE KPI MEASURES  ->  create in a dedicated "_Measures" table
+--------------------------------------------------------------------------------
+
+Total Revenue =
+SUM ( vw_sales_fact[total_price] )
+
+
+Total Unique Customers =
+DISTINCTCOUNT ( vw_sales_fact[customer_id] )
+
+
+Average Order Value =
+VAR Revenue = [Total Revenue]
+VAR Orders  = DISTINCTCOUNT ( vw_sales_fact[invoice_no] )
+RETURN
+    DIVIDE ( Revenue, Orders )
+
+
+--------------------------------------------------------------------------------
+3. FORMATTING
+--------------------------------------------------------------------------------
+Total Revenue           ->  Currency, 0 decimals
+Total Unique Customers  ->  Whole number, thousands separator
+Average Order Value     ->  Currency, 2 decimals
